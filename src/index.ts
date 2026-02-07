@@ -19,7 +19,7 @@ export interface SdkConfig {
  */
 export interface AppConfig {
 	name: string;
-	sourceFilesGlob: string;
+	sourceFilesGlob?: string;
 	entryFile: string;
 	typeAliasName?: string;
 	sdk?: SdkConfig;
@@ -263,7 +263,11 @@ export function generateDocs(options: GenerateDocsOptions): void {
 		const sdkClientOptions = app.sdk?.clientOptions;
 
 		console.log(`Generating docs for ${appName}...`);
-		project.addSourceFilesAtPaths(resolve(projectRoot, app.sourceFilesGlob));
+		if (app.sourceFilesGlob) {
+			project.addSourceFilesAtPaths(resolve(projectRoot, app.sourceFilesGlob));
+		} else {
+			project.addSourceFileAtPath(resolve(projectRoot, app.entryFile));
+		}
 
 		const sourceFile = project.getSourceFile(
 			resolve(projectRoot, app.entryFile),

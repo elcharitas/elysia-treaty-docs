@@ -50,7 +50,7 @@ generateDocs({
 ### AppConfig
 
 - `name`: Display name for the app.
-- `sourceFilesGlob`: Glob pattern for source files.
+- `sourceFilesGlob`: Glob pattern for source files (optional).
 - `entryFile`: Path to the entry file containing the type alias.
 - `typeAliasName`: Name of the type alias defining the routes (default: `"App"`).
 - `sdkImport`: Import statement for the SDK (default: `'import { treaty } from "elysia";'`).
