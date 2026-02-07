@@ -179,7 +179,7 @@ function generateDocsFromType(
 			const hasQuery = routeTypes.query !== "unknown";
 
 			parts.push(
-				`### ${propName.toUpperCase()} ${path}\n\n#### SDK Usage\n\n`,
+				`### ${propName.toUpperCase()} ${path}\n\n<details>\n<summary>SDK Usage</summary>\n\n`,
 				generateSdkCodeBlock(
 					path,
 					propName,
@@ -195,6 +195,7 @@ function generateDocsFromType(
 				hasParams ? formatTypeBlock("Params", routeTypes.params) : "",
 				hasQuery ? formatTypeBlock("Query", routeTypes.query) : "",
 				formatTypeBlock("Response", routeTypes.response),
+				"</details>\n\n",
 				"---\n\n",
 			);
 		} else if (propName === "~Routes") {
