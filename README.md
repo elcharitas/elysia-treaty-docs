@@ -24,8 +24,6 @@ generateDocs({
       sourceFilesGlob: "src/**/*.ts", // Optional
       entryFile: "src/index.ts", // Optional
       typeAliasName: "App", // Optional
-      sdkImport: 'import { createClient } from "my-sdk";', // Optional
-      sdkClientName: "createClient", // Optional
     },
   ],
   projectRoot: "/path/to/your/project",
@@ -53,8 +51,6 @@ generateDocs({
 - `sourceFilesGlob`: Glob pattern for source files (optional).
 - `entryFile`: Path to the entry file containing the type alias.
 - `typeAliasName`: Name of the type alias defining the routes (default: `"App"`).
-- `sdkImport`: Import statement for the SDK (default: `'import { treaty } from "elysia";'`).
-- `sdkClientName`: Name of the SDK client factory function (default: `"treaty"`).
 
 ## Requirements
 
