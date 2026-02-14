@@ -1,6 +1,11 @@
 import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { Project, type Type, type TypeAliasDeclaration } from "ts-morph";
+import {
+	Project,
+	TypeFormatFlags,
+	type Type,
+	type TypeAliasDeclaration,
+} from "ts-morph";
 
 /**
  * Configuration for SDK options in the documentation generation process.
@@ -37,6 +42,34 @@ export interface GenerateDocsOptions {
 	description?: string;
 }
 
+/** Well-known generic type names that should be preserved rather than expanded. */
+const KNOWN_GENERICS = new Set([
+	"Array",
+	"ReadonlyArray",
+	"Promise",
+	"Map",
+	"Set",
+	"WeakMap",
+	"WeakSet",
+	"Readonly",
+	"Partial",
+	"Required",
+	"Pick",
+	"Omit",
+	"Record",
+	"Exclude",
+	"Extract",
+	"NonNullable",
+	"ReturnType",
+	"Iterable",
+	"Iterator",
+	"AsyncIterable",
+	"AsyncIterator",
+	"Generator",
+	"AsyncGenerator",
+	"IterableIterator",
+]);
+
 const HTTP_METHODS = new Set(["get", "post", "put", "delete", "patch"]);
 const INTERNAL_PROPS = new Set([
 	"decorator",
@@ -48,6 +81,73 @@ const INTERNAL_PROPS = new Set([
 	"response",
 ]);
 const VALID_IDENT = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/;
+
+/**
+ * Resolves a ts-morph Type to a concise TypeScript type string, preventing
+ * the compiler from fully expanding well-known generic interfaces such as
+ * `Array`, `Promise`, `Map`, etc.
+ */
+function resolveTypeText(
+	type: Type,
+	enclosingNode: TypeAliasDeclaration,
+): string {
+	// Array<T> / T[]
+	if (type.isArray()) {
+		const elementType = type.getArrayElementType();
+		if (!elementType) return "unknown[]";
+		const inner = resolveTypeText(elementType, enclosingNode);
+		// Wrap union/intersection element types in Array<> for clarity
+		if (elementType.isUnion() || elementType.isIntersection()) {
+			return `Array<${inner}>`;
+		}
+		return `${inner}[]`;
+	}
+
+	// Tuple types
+	if (type.isTuple()) {
+		const elements = type
+			.getTupleElements()
+			.map((t) => resolveTypeText(t, enclosingNode));
+		return `[${elements.join(", ")}]`;
+	}
+
+	// Union types
+	if (type.isUnion()) {
+		const parts = type
+			.getUnionTypes()
+			.map((t) => resolveTypeText(t, enclosingNode));
+		return parts.join(" | ");
+	}
+
+	// Intersection types
+	if (type.isIntersection()) {
+		const parts = type
+			.getIntersectionTypes()
+			.map((t) => resolveTypeText(t, enclosingNode));
+		return parts.join(" & ");
+	}
+
+	// Preserve well-known generic types (Promise<T>, Map<K,V>, etc.)
+	const symbol = type.getSymbol() ?? type.getAliasSymbol();
+	if (symbol) {
+		const name = symbol.getName();
+		const typeArgs =
+			type.getTypeArguments().length > 0
+				? type.getTypeArguments()
+				: type.getAliasTypeArguments();
+
+		if (KNOWN_GENERICS.has(name) && typeArgs.length > 0) {
+			const args = typeArgs.map((t) => resolveTypeText(t, enclosingNode));
+			return `${name}<${args.join(", ")}>`;
+		}
+	}
+
+	return type.getText(
+		enclosingNode,
+		TypeFormatFlags.UseAliasDefinedOutsideCurrentScope
+			| TypeFormatFlags.NoTruncation,
+	);
+}
 
 /** Extracts route parameters (e.g. `:id`) from a path and returns a TS object literal type string. */
 function parseParamsFromPath(path: string): string {
@@ -165,7 +265,10 @@ function generateDocsFromType(
 			for (const methodProp of propType.getProperties()) {
 				const key = methodProp.getName();
 				if (key in routeTypes) {
-					routeTypes[key] = methodProp.getTypeAtLocation(typeAlias).getText();
+					routeTypes[key] = resolveTypeText(
+						methodProp.getTypeAtLocation(typeAlias),
+						typeAlias,
+					);
 				}
 			}
 
