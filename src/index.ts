@@ -136,7 +136,7 @@ function generateSdkCodeBlock(
 
 /** Renders a labeled type block in Markdown. */
 function formatTypeBlock(label: string, typeStr: string): string {
-	return `**${label}:**\n\n\`\`\`typescript\n${prettyPrintType(typeStr)}\n\`\`\`\n\n`;
+	return `**${label}:**\n\n\`\`\`typescript\n${prettyPrintType(typeStr)}\`\`\`\n\n`;
 }
 
 /** Recursively walks an Elysia type tree and generates Markdown documentation for each endpoint. */
