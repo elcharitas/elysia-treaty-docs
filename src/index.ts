@@ -172,6 +172,25 @@ function resolveTypeText(
 			.map((t) => resolveTypeText(t, enclosingNode, depth + 1));
 		// Deduplicate to avoid "string | null | undefined | undefined"
 		const unique = [...new Set(parts)];
+
+		// Collapse `false | true` back to `boolean`
+		const hasFalse = unique.includes("false");
+		const hasTrue = unique.includes("true");
+		if (hasFalse && hasTrue) {
+			const collapsed = unique.filter((p) => p !== "false" && p !== "true");
+			collapsed.push("boolean");
+			unique.length = 0;
+			unique.push(...collapsed);
+		}
+
+		// Ensure concrete types first, null/undefined last
+		const nullish = new Set(["null", "undefined"]);
+		unique.sort((a, b) => {
+			const aN = nullish.has(a) ? 1 : 0;
+			const bN = nullish.has(b) ? 1 : 0;
+			return aN - bN;
+		});
+
 		return unique.join(" | ");
 	}
 
@@ -385,7 +404,10 @@ function generateSdkCodeBlock(
 		`${sdkImport}\n`,
 		`const client = ${sdkClientName}(${sdkClientOptions || ""});\n`,
 		hasParams &&
-			`const params = ${paramsType.replace(/;/g, ",").replace(/,(\s*})/g, "$1").replace(/: string/g, ': "example-value"')};\n`,
+			`const params = ${paramsType
+				.replace(/;/g, ",")
+				.replace(/,(\s*})/g, "$1")
+				.replace(/: string/g, ': "example-value"')};\n`,
 		hasBody &&
 			"// Define your request body\nconst body = {}; // Replace with actual body data\n",
 		hasQuery &&
