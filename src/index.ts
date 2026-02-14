@@ -102,6 +102,14 @@ const ARRAY_FINGERPRINT = new Set([
 	"find",
 ]);
 
+/**
+ * Regex that detects expanded-Array noise in a stringified type.
+ * Matches things like `[Symbol.unscopables]`, `[Symbol.iterator]`, or
+ * several Array-prototype method names appearing as property keys.
+ */
+const EXPANDED_ARRAY_RE =
+	/\[\s*Symbol\.\s*(unscopables|iterator)\s*\]|(?:pop|push|shift|splice|concat|reverse|forEach|indexOf)\??\s*:/;
+
 /** Maximum recursion depth for resolveTypeText to guard against circular types. */
 const MAX_RESOLVE_DEPTH = 10;
 
@@ -109,6 +117,13 @@ const MAX_RESOLVE_DEPTH = 10;
  * Resolves a ts-morph Type to a concise TypeScript type string, preventing
  * the compiler from fully expanding well-known generic interfaces such as
  * `Array`, `Promise`, `Map`, etc.
+ *
+ * Strategy:
+ * 1. Handle arrays, tuples, unions, intersections, and known generics directly.
+ * 2. For object types, first try getText() with alias-preserving flags. If the
+ *    result is clean (no expanded array noise), use it as-is.
+ * 3. Only fall back to recursive property iteration when the getText() output
+ *    contains telltale signs of structural array expansion.
  */
 function resolveTypeText(
 	type: Type,
@@ -175,14 +190,13 @@ function resolveTypeText(
 				);
 				return `${name}<${args.join(", ")}>`;
 			}
-			// Known generic with no type args — return name as-is (e.g. `Set`)
 			return name;
 		}
 	}
 
-	// Detect structurally-expanded Array-like types that isArray() missed.
-	// These have a numeric index signature and properties matching the Array prototype.
+	// For object types, detect and collapse structurally-expanded arrays
 	if (type.isObject()) {
+		// Direct fingerprint check: numeric index + Array-prototype props → T[]
 		const numberIndexType = type.getNumberIndexType();
 		if (numberIndexType) {
 			const propNames = new Set(type.getProperties().map((p) => p.getName()));
@@ -190,7 +204,6 @@ function resolveTypeText(
 			for (const fp of ARRAY_FINGERPRINT) {
 				if (propNames.has(fp)) matched++;
 			}
-			// If ≥75% of fingerprint properties match, treat as Array<T>
 			if (matched >= ARRAY_FINGERPRINT.size * 0.75) {
 				const inner = resolveTypeText(
 					numberIndexType,
@@ -201,15 +214,24 @@ function resolveTypeText(
 			}
 		}
 
-		// Recursively resolve anonymous/structural object types instead of
-		// letting getText() expand everything.
+		// Try getText() first — if it's clean, use it directly
+		const text = type.getText(
+			enclosingNode,
+			TypeFormatFlags.UseAliasDefinedOutsideCurrentScope |
+				TypeFormatFlags.NoTruncation,
+		);
+
+		if (!EXPANDED_ARRAY_RE.test(text)) {
+			return text;
+		}
+
+		// getText() contains expanded-array noise — recurse into properties
+		// to resolve each one individually, collapsing arrays at every level
 		const properties = type.getProperties();
 		if (properties.length > 0 && type.getCallSignatures().length === 0) {
 			const entries: string[] = [];
 			for (const prop of properties) {
 				const propName = prop.getName();
-
-				// Skip symbol-keyed properties (e.g. __@unscopables, __@iterator)
 				if (propName.startsWith("__@")) continue;
 
 				const propType = prop.getTypeAtLocation(enclosingNode);
@@ -226,6 +248,8 @@ function resolveTypeText(
 				return `{ ${entries.join("; ")} }`;
 			}
 		}
+
+		return text;
 	}
 
 	// Fallback: let the compiler stringify with flags that discourage expansion
