@@ -82,6 +82,29 @@ const INTERNAL_PROPS = new Set([
 ]);
 const VALID_IDENT = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/;
 
+/** Fingerprint properties used to detect structurally-expanded Array types. */
+const ARRAY_FINGERPRINT = new Set([
+	"length",
+	"push",
+	"pop",
+	"concat",
+	"join",
+	"reverse",
+	"shift",
+	"slice",
+	"sort",
+	"splice",
+	"indexOf",
+	"forEach",
+	"map",
+	"filter",
+	"reduce",
+	"find",
+]);
+
+/** Maximum recursion depth for resolveTypeText to guard against circular types. */
+const MAX_RESOLVE_DEPTH = 10;
+
 /**
  * Resolves a ts-morph Type to a concise TypeScript type string, preventing
  * the compiler from fully expanding well-known generic interfaces such as
@@ -90,13 +113,22 @@ const VALID_IDENT = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/;
 function resolveTypeText(
 	type: Type,
 	enclosingNode: TypeAliasDeclaration,
+	depth = 0,
 ): string {
+	// Guard against infinite recursion on circular types
+	if (depth > MAX_RESOLVE_DEPTH) {
+		return type.getText(
+			enclosingNode,
+			TypeFormatFlags.UseAliasDefinedOutsideCurrentScope |
+				TypeFormatFlags.NoTruncation,
+		);
+	}
+
 	// Array<T> / T[]
 	if (type.isArray()) {
 		const elementType = type.getArrayElementType();
 		if (!elementType) return "unknown[]";
-		const inner = resolveTypeText(elementType, enclosingNode);
-		// Wrap union/intersection element types in Array<> for clarity
+		const inner = resolveTypeText(elementType, enclosingNode, depth + 1);
 		if (elementType.isUnion() || elementType.isIntersection()) {
 			return `Array<${inner}>`;
 		}
@@ -107,7 +139,7 @@ function resolveTypeText(
 	if (type.isTuple()) {
 		const elements = type
 			.getTupleElements()
-			.map((t) => resolveTypeText(t, enclosingNode));
+			.map((t) => resolveTypeText(t, enclosingNode, depth + 1));
 		return `[${elements.join(", ")}]`;
 	}
 
@@ -115,7 +147,7 @@ function resolveTypeText(
 	if (type.isUnion()) {
 		const parts = type
 			.getUnionTypes()
-			.map((t) => resolveTypeText(t, enclosingNode));
+			.map((t) => resolveTypeText(t, enclosingNode, depth + 1));
 		return parts.join(" | ");
 	}
 
@@ -123,11 +155,11 @@ function resolveTypeText(
 	if (type.isIntersection()) {
 		const parts = type
 			.getIntersectionTypes()
-			.map((t) => resolveTypeText(t, enclosingNode));
+			.map((t) => resolveTypeText(t, enclosingNode, depth + 1));
 		return parts.join(" & ");
 	}
 
-	// Preserve well-known generic types (Promise<T>, Map<K,V>, etc.)
+	// Preserve well-known generic types (Promise<T>, Map<K,V>, Set<T>, etc.)
 	const symbol = type.getSymbol() ?? type.getAliasSymbol();
 	if (symbol) {
 		const name = symbol.getName();
@@ -136,16 +168,71 @@ function resolveTypeText(
 				? type.getTypeArguments()
 				: type.getAliasTypeArguments();
 
-		if (KNOWN_GENERICS.has(name) && typeArgs.length > 0) {
-			const args = typeArgs.map((t) => resolveTypeText(t, enclosingNode));
-			return `${name}<${args.join(", ")}>`;
+		if (KNOWN_GENERICS.has(name)) {
+			if (typeArgs.length > 0) {
+				const args = typeArgs.map((t) =>
+					resolveTypeText(t, enclosingNode, depth + 1),
+				);
+				return `${name}<${args.join(", ")}>`;
+			}
+			// Known generic with no type args — return name as-is (e.g. `Set`)
+			return name;
 		}
 	}
 
+	// Detect structurally-expanded Array-like types that isArray() missed.
+	// These have a numeric index signature and properties matching the Array prototype.
+	if (type.isObject()) {
+		const numberIndexType = type.getNumberIndexType();
+		if (numberIndexType) {
+			const propNames = new Set(type.getProperties().map((p) => p.getName()));
+			let matched = 0;
+			for (const fp of ARRAY_FINGERPRINT) {
+				if (propNames.has(fp)) matched++;
+			}
+			// If ≥75% of fingerprint properties match, treat as Array<T>
+			if (matched >= ARRAY_FINGERPRINT.size * 0.75) {
+				const inner = resolveTypeText(
+					numberIndexType,
+					enclosingNode,
+					depth + 1,
+				);
+				return `${inner}[]`;
+			}
+		}
+
+		// Recursively resolve anonymous/structural object types instead of
+		// letting getText() expand everything.
+		const properties = type.getProperties();
+		if (properties.length > 0 && type.getCallSignatures().length === 0) {
+			const entries: string[] = [];
+			for (const prop of properties) {
+				const propName = prop.getName();
+
+				// Skip symbol-keyed properties (e.g. __@unscopables, __@iterator)
+				if (propName.startsWith("__@")) continue;
+
+				const propType = prop.getTypeAtLocation(enclosingNode);
+				const optional = prop.isOptional() ? "?" : "";
+				const resolved = resolveTypeText(propType, enclosingNode, depth + 1);
+
+				const key = VALID_IDENT.test(propName)
+					? propName
+					: JSON.stringify(propName);
+				entries.push(`${key}${optional}: ${resolved}`);
+			}
+
+			if (entries.length > 0) {
+				return `{ ${entries.join("; ")} }`;
+			}
+		}
+	}
+
+	// Fallback: let the compiler stringify with flags that discourage expansion
 	return type.getText(
 		enclosingNode,
-		TypeFormatFlags.UseAliasDefinedOutsideCurrentScope
-			| TypeFormatFlags.NoTruncation,
+		TypeFormatFlags.UseAliasDefinedOutsideCurrentScope |
+			TypeFormatFlags.NoTruncation,
 	);
 }
 
@@ -187,7 +274,10 @@ function prettyPrintType(typeStr: string): string {
 		}
 	}
 
-	return chunks.join("").trim();
+	return chunks
+		.join("")
+		.replace(/([;,])\n\s*\n(\s*[}\]])/g, "$1\n$2")
+		.trim();
 }
 
 /** Builds a treaty-style client path expression from a URL path. */
@@ -236,7 +326,7 @@ function generateSdkCodeBlock(
 
 /** Renders a labeled type block in Markdown. */
 function formatTypeBlock(label: string, typeStr: string): string {
-	return `**${label}:**\n\n\`\`\`typescript\n${prettyPrintType(typeStr)}\`\`\`\n\n`;
+	return `**${label}:**\n\n\`\`\`typescript\n${prettyPrintType(typeStr)}\n\`\`\`\n\n`;
 }
 
 /** Recursively walks an Elysia type tree and generates Markdown documentation for each endpoint. */
