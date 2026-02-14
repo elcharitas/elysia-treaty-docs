@@ -163,7 +163,9 @@ function resolveTypeText(
 		const parts = type
 			.getUnionTypes()
 			.map((t) => resolveTypeText(t, enclosingNode, depth + 1));
-		return parts.join(" | ");
+		// Deduplicate to avoid "string | null | undefined | undefined"
+		const unique = [...new Set(parts)];
+		return unique.join(" | ");
 	}
 
 	// Intersection types
@@ -369,6 +371,8 @@ function generateDocsFromType(
 		const propType = prop.getTypeAtLocation(typeAlias);
 
 		if (HTTP_METHODS.has(propName)) {
+			// Skip catch-all wildcard routes that have no real path
+			if (!path) continue;
 			const routeTypes: Record<string, string> = {
 				body: "unknown",
 				params: "{}",
