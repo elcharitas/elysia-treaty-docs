@@ -377,8 +377,7 @@ function buildClientPath(path: string): string {
 		.split("/")
 		.filter(Boolean)
 		.reduce((chain, segment) => {
-			if (segment.startsWith(":"))
-				return `${chain}[params.${segment.slice(1)}]`;
+			if (segment.startsWith(":")) return chain; // skip params
 			if (VALID_IDENT.test(segment)) return `${chain}.${segment}`;
 			return `${chain}["${segment}"]`;
 		}, "client");
@@ -399,20 +398,24 @@ function generateSdkCodeBlock(
 	const callArgs = [hasBody && "body", hasQuery && "{ query }"]
 		.filter(Boolean)
 		.join(", ");
+	let clientCall = buildClientPath(path);
+	if (hasParams) {
+		const paramsObj = paramsType
+			.replace(/;/g, ",")
+			.replace(/,(\s*})/g, "$1")
+			.replace(/: string/g, ': "example-value"');
+		clientCall += `(${paramsObj})`;
+	}
+	clientCall += `.${method}(${callArgs})`;
 	const lines = [
 		"```typescript",
 		`${sdkImport}\n`,
 		`const client = ${sdkClientName}(${sdkClientOptions || ""});\n`,
-		hasParams &&
-			`const params = ${paramsType
-				.replace(/;/g, ",")
-				.replace(/,(\s*})/g, "$1")
-				.replace(/: string/g, ': "example-value"')};\n`,
 		hasBody &&
 			"// Define your request body\nconst body = {}; // Replace with actual body data\n",
 		hasQuery &&
 			"// Define your query parameters\nconst query = {}; // Replace with actual query data\n",
-		`const response = await ${buildClientPath(path)}.${method}(${callArgs});`,
+		`const response = await ${clientCall};`,
 		"```\n",
 	];
 	return lines.filter(Boolean).join("\n");
