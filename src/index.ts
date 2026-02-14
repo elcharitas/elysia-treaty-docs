@@ -110,6 +110,13 @@ const ARRAY_FINGERPRINT = new Set([
 const EXPANDED_ARRAY_RE =
 	/\[\s*Symbol\.\s*(unscopables|iterator)\s*\]|(?:pop|push|shift|splice|concat|reverse|forEach|indexOf)\??\s*:/;
 
+/**
+ * Detects duplicated primitive union members in getText() output.
+ * E.g. `string | null | undefined | undefined` — the repeated member is noise
+ * from intersection resolution and should trigger property-level recursion.
+ */
+const DUPLICATE_UNION_RE = /\b(undefined|null)\b[^;{}]*?\|\s*\1\b/;
+
 /** Maximum recursion depth for resolveTypeText to guard against circular types. */
 const MAX_RESOLVE_DEPTH = 10;
 
@@ -170,10 +177,49 @@ function resolveTypeText(
 
 	// Intersection types
 	if (type.isIntersection()) {
-		const parts = type
-			.getIntersectionTypes()
-			.map((t) => resolveTypeText(t, enclosingNode, depth + 1));
-		return parts.join(" & ");
+		const members = type.getIntersectionTypes();
+
+		// When every member is an anonymous object type (common with
+		// Elysia/better-auth overlapping interfaces), flatten into a single
+		// merged object to avoid `{ … } & { … }` with duplicate properties.
+		const allAnonymousObjects =
+			members.every(
+				(m) =>
+					m.isObject() &&
+					!m.isArray() &&
+					m.getCallSignatures().length === 0 &&
+					!KNOWN_GENERICS.has(m.getSymbol()?.getName() ?? "") &&
+					!KNOWN_GENERICS.has(m.getAliasSymbol()?.getName() ?? ""),
+			) && members.some((m) => m.getProperties().length > 0);
+
+		if (allAnonymousObjects && members.length > 1) {
+			const properties = type.getProperties();
+			const entries: string[] = [];
+			for (const prop of properties) {
+				const propName = prop.getName();
+				if (propName.startsWith("__@")) continue;
+				const propType = prop.getTypeAtLocation(enclosingNode);
+				const optional = prop.isOptional() ? "?" : "";
+				const resolved = resolveTypeText(propType, enclosingNode, depth + 1);
+				const key = VALID_IDENT.test(propName)
+					? propName
+					: JSON.stringify(propName);
+				entries.push(`${key}${optional}: ${resolved}`);
+			}
+			if (entries.length > 0) {
+				return `{ ${entries.join("; ")} }`;
+			}
+		}
+
+		// Fall back: resolve each member individually, drop empty objects, dedup
+		const parts = members.map((t) =>
+			resolveTypeText(t, enclosingNode, depth + 1),
+		);
+		const filtered = parts.filter((p) => p !== "{}");
+		const unique = [...new Set(filtered)];
+		if (unique.length === 0) return "{}";
+		if (unique.length === 1) return unique[0];
+		return unique.join(" & ");
 	}
 
 	// Preserve well-known generic types (Promise<T>, Map<K,V>, Set<T>, etc.)
@@ -223,7 +269,7 @@ function resolveTypeText(
 				TypeFormatFlags.NoTruncation,
 		);
 
-		if (!EXPANDED_ARRAY_RE.test(text)) {
+		if (!EXPANDED_ARRAY_RE.test(text) && !DUPLICATE_UNION_RE.test(text)) {
 			return text;
 		}
 
@@ -339,7 +385,7 @@ function generateSdkCodeBlock(
 		`${sdkImport}\n`,
 		`const client = ${sdkClientName}(${sdkClientOptions || ""});\n`,
 		hasParams &&
-			`const params = ${paramsType.replace(/: string/g, ': "example-value"')};\n`,
+			`const params = ${paramsType.replace(/;/g, ",").replace(/,(\s*})/g, "$1").replace(/: string/g, ': "example-value"')};\n`,
 		hasBody &&
 			"// Define your request body\nconst body = {}; // Replace with actual body data\n",
 		hasQuery &&
