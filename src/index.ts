@@ -341,27 +341,51 @@ function prettyPrintType(typeStr: string): string {
 	let indent = 0;
 	let inString = false;
 	let escaped = false;
+	let i = 0;
 
-	for (const char of typeStr) {
+	while (i < typeStr.length) {
+		const char = typeStr[i];
+
 		if (escaped) {
 			chunks.push(char);
 			escaped = false;
+			i++;
 		} else if (char === "\\") {
 			chunks.push(char);
 			escaped = true;
+			i++;
 		} else if (char === '"' || char === "'") {
 			inString = !inString;
 			chunks.push(char);
+			i++;
 		} else if (inString) {
 			chunks.push(char);
+			i++;
 		} else if (char === "{" || char === "[") {
+			// For arrays (Type[]), don't add newlines if it's just []
+			if (char === "[" && i + 1 < typeStr.length) {
+				let j = i + 1;
+				while (j < typeStr.length && typeStr[j] === " ") j++;
+				if (j < typeStr.length && typeStr[j] === "]") {
+					// Simple array, don't indent
+					chunks.push(char, typeStr[j]);
+					i = j + 1;
+					continue;
+				}
+			}
 			chunks.push(char, "\n", "  ".repeat(++indent));
+			i++;
 		} else if (char === "}" || char === "]") {
 			chunks.push("\n", "  ".repeat(--indent), char);
+			i++;
 		} else if (char === ";" || char === ",") {
 			chunks.push(char, "\n", "  ".repeat(indent));
+			i++;
 		} else if (char !== " " || chunks[chunks.length - 1] !== " ") {
 			chunks.push(char);
+			i++;
+		} else {
+			i++;
 		}
 	}
 
