@@ -40,6 +40,7 @@ export interface GenerateDocsOptions {
 	outputPath?: string;
 	title?: string;
 	description?: string;
+	project?: Project;
 }
 
 /** Well-known generic type names that should be preserved rather than expanded. */
@@ -570,7 +571,7 @@ export function generateDocs(options: GenerateDocsOptions): void {
 	} = options;
 
 	const parts = [`# ${title}\n\n${description}\n\n`];
-	const project = new Project({ tsConfigFilePath });
+	const project = options.project ?? new Project({ tsConfigFilePath });
 
 	for (const app of apps) {
 		const appName = app.name;
