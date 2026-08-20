@@ -402,7 +402,11 @@ function buildClientPath(path: string): string {
 		.split("/")
 		.filter(Boolean)
 		.reduce((chain, segment) => {
-			if (segment.startsWith(":")) return chain; // skip params
+			// A param call attaches to the segment it follows, not the end of
+			// the chain, so /nodes/:id/exercises resolves to
+			// nodes({id}).exercises rather than nodes.exercises({id}).
+			if (segment.startsWith(":"))
+				return `${chain}({ ${segment.slice(1)}: "example-value" })`;
 			if (VALID_IDENT.test(segment)) return `${chain}.${segment}`;
 			return `${chain}["${segment}"]`;
 		}, "client");
@@ -413,9 +417,7 @@ function generateSdkCodeBlock(
 	path: string,
 	method: string,
 	hasBody: boolean,
-	hasParams: boolean,
 	hasQuery: boolean,
-	paramsType: string,
 	sdkImport: string,
 	sdkClientName: string,
 	sdkClientOptions?: string,
@@ -423,14 +425,8 @@ function generateSdkCodeBlock(
 	const callArgs = [hasBody && "body", hasQuery && "{ query }"]
 		.filter(Boolean)
 		.join(", ");
+	// Params are already inlined at their correct position by buildClientPath.
 	let clientCall = buildClientPath(path);
-	if (hasParams) {
-		const paramsObj = paramsType
-			.replace(/;/g, ",")
-			.replace(/,(\s*})/g, "$1")
-			.replace(/: string/g, ': "example-value"');
-		clientCall += `(${paramsObj})`;
-	}
 	clientCall += `.${method}(${callArgs})`;
 	const lines = [
 		"```typescript",
@@ -501,9 +497,7 @@ function generateDocsFromType(
 					path,
 					propName,
 					hasBody,
-					hasParams,
 					hasQuery,
-					routeTypes.params,
 					sdkImport,
 					sdkClientName,
 					sdkClientOptions,
