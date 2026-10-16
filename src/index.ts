@@ -1,6 +1,7 @@
 import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
+	Node,
 	Project,
 	type Type,
 	type TypeAliasDeclaration,
@@ -221,11 +222,16 @@ function resolveTypeText(
 				if (propName.startsWith("__@")) continue;
 				const propType = prop.getTypeAtLocation(enclosingNode);
 				const optional = prop.isOptional() ? "?" : "";
+				const readonly = prop
+					.getDeclarations()
+					.some((node) => Node.isReadonlyable(node) && node.isReadonly())
+					? "readonly "
+					: "";
 				const resolved = resolveTypeText(propType, enclosingNode, depth + 1);
 				const key = VALID_IDENT.test(propName)
 					? propName
 					: JSON.stringify(propName);
-				entries.push(`${key}${optional}: ${resolved}`);
+				entries.push(`${readonly}${key}${optional}: ${resolved}`);
 			}
 			if (entries.length > 0) {
 				return `{ ${entries.join("; ")} }`;
@@ -305,12 +311,17 @@ function resolveTypeText(
 
 				const propType = prop.getTypeAtLocation(enclosingNode);
 				const optional = prop.isOptional() ? "?" : "";
+				const readonly = prop
+					.getDeclarations()
+					.some((node) => Node.isReadonlyable(node) && node.isReadonly())
+					? "readonly "
+					: "";
 				const resolved = resolveTypeText(propType, enclosingNode, depth + 1);
 
 				const key = VALID_IDENT.test(propName)
 					? propName
 					: JSON.stringify(propName);
-				entries.push(`${key}${optional}: ${resolved}`);
+				entries.push(`${readonly}${key}${optional}: ${resolved}`);
 			}
 
 			if (entries.length > 0) {
@@ -373,16 +384,23 @@ function prettyPrintType(typeStr: string): string {
 							printer.printNode(ts.EmitHint.Unspecified, type, source);
 						const rank = (value: string) =>
 							value === "undefined" ? 2 : value === "null" ? 1 : 0;
-						result = context.factory.updateUnionTypeNode(
-							result,
-							context.factory.createNodeArray(
-								[...result.types].sort((a, b) => {
-									const left = text(a);
-									const right = text(b);
-									return rank(left) - rank(right) || compareText(left, right);
-								}),
-							),
+						// Compare whole shapes to preserve field relationships.
+						const unique = new Map(
+							result.types.map((type) => [text(type), type]),
 						);
+						const alternatives = [...unique]
+							.sort(
+								([left], [right]) =>
+									rank(left) - rank(right) || compareText(left, right),
+							)
+							.map(([, type]) => type);
+						result =
+							alternatives.length === 1
+								? alternatives[0]
+								: context.factory.updateUnionTypeNode(
+										result,
+										context.factory.createNodeArray(alternatives),
+									);
 					}
 					ts.setEmitFlags(result, ts.EmitFlags.SingleLine);
 					return result;
