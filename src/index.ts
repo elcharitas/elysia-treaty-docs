@@ -2,9 +2,10 @@ import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
 	Project,
-	TypeFormatFlags,
 	type Type,
 	type TypeAliasDeclaration,
+	TypeFormatFlags,
+	ts,
 } from "ts-morph";
 
 /**
@@ -338,6 +339,65 @@ function parseParamsFromPath(path: string): string {
 
 /** Pretty-prints a compact TypeScript type string with indentation. */
 function prettyPrintType(typeStr: string): string {
+	// getText() bypasses property iteration, so sort rendered types too.
+	const source = ts.createSourceFile(
+		"type.ts",
+		`type Result = ${typeStr};`,
+		ts.ScriptTarget.Latest,
+		true,
+	);
+	const declaration = source.statements[0];
+	if (declaration && ts.isTypeAliasDeclaration(declaration)) {
+		const printer = ts.createPrinter({ removeComments: true });
+		const transformed = ts.transform(declaration.type, [
+			(context) => (root) => {
+				const visit: ts.Visitor = (node) => {
+					let result = ts.visitEachChild(node, visit, context);
+					if (ts.isTypeLiteralNode(result)) {
+						const properties = result.members
+							.filter(ts.isPropertySignature)
+							.sort((a, b) =>
+								compareText(a.name.getText(source), b.name.getText(source)),
+							);
+						let index = 0;
+						result = context.factory.updateTypeLiteralNode(
+							result,
+							context.factory.createNodeArray(
+								result.members.map((member) =>
+									ts.isPropertySignature(member) ? properties[index++] : member,
+								),
+							),
+						);
+					} else if (ts.isUnionTypeNode(result)) {
+						const text = (type: ts.TypeNode) =>
+							printer.printNode(ts.EmitHint.Unspecified, type, source);
+						const rank = (value: string) =>
+							value === "undefined" ? 2 : value === "null" ? 1 : 0;
+						result = context.factory.updateUnionTypeNode(
+							result,
+							context.factory.createNodeArray(
+								[...result.types].sort((a, b) => {
+									const left = text(a);
+									const right = text(b);
+									return rank(left) - rank(right) || compareText(left, right);
+								}),
+							),
+						);
+					}
+					ts.setEmitFlags(result, ts.EmitFlags.SingleLine);
+					return result;
+				};
+				return ts.visitNode(root, visit, ts.isTypeNode) ?? root;
+			},
+		]);
+		typeStr = printer.printNode(
+			ts.EmitHint.Unspecified,
+			transformed.transformed[0],
+			source,
+		);
+		transformed.dispose();
+	}
+
 	const chunks: string[] = [];
 	let indent = 0;
 	let inString = false;
@@ -394,6 +454,10 @@ function prettyPrintType(typeStr: string): string {
 		.join("")
 		.replace(/([;,])\n\s*\n(\s*[}\]])/g, "$1\n$2")
 		.trim();
+}
+
+function compareText(left: string, right: string): number {
+	return left < right ? -1 : left > right ? 1 : 0;
 }
 
 /** Builds a treaty-style client path expression from a URL path. */
@@ -458,7 +522,10 @@ function generateDocsFromType(
 ): string {
 	const parts: string[] = [];
 
-	for (const prop of type.getProperties()) {
+	const properties = type
+		.getProperties()
+		.sort((a, b) => compareText(a.getName(), b.getName()));
+	for (const prop of properties) {
 		const propName = prop.getName();
 		const propType = prop.getTypeAtLocation(typeAlias);
 
