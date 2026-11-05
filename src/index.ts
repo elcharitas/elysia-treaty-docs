@@ -572,9 +572,13 @@ function generateDocsFromType(
 				if (match) routeTypes.params = parseParamsFromPath(match[1]);
 			}
 
-			const hasBody = routeTypes.body !== "unknown";
+			const hasBody = !["unknown", "{}"].includes(
+				routeTypes.body.replace(/\s/g, ""),
+			);
 			const hasParams = routeTypes.params !== "{}";
-			const hasQuery = routeTypes.query !== "unknown";
+			const hasQuery = !["unknown", "{}"].includes(
+				routeTypes.query.replace(/\s/g, ""),
+			);
 
 			parts.push(
 				`### ${propName.toUpperCase()} ${path}\n\n<details>\n<summary>SDK Usage</summary>\n\n`,
